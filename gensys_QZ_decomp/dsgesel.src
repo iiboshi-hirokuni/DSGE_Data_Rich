@@ -1,0 +1,864 @@
+/* This library contains the following procedures
+**
+** proc(1) = priodens(para,pmean,pstdd,pshape)
+** proc(3) = refprior(lambda,YY,XX);
+** proc(1) = lngam(x)
+** proc(1) = lpdfbet(x,a,b)
+** proc(1) = lpdfgam(x,a,b)
+** proc(1) = lpdfnor(x,a,b)
+** proc(1) = lpdfig(x,a,b)
+** proc(1) = lpdfiw(G,H,nu)
+**
+** proc (1) = bfgsi(H0,dg,dx)
+** {fhat,xhat,fcount,retcode} = csminit(x0,f0,g0,badg,H0)
+** {g,badg} = numgrad(x0)
+** {fh,xh,g,H,itct,fcount,retcode} =csminwel(x0,H0,crit,nit)
+**
+** proc (1) = trans(para)
+** proc (1) = invtrans(para)
+**
+** proc (1) = symmat(a)
+** proc (1) = lowtrmat(a)
+** proc (1) = lowtrvec(a)
+** proc (1) = cholpsd
+*/
+
+/* initialize some global variables
+*/
+declare matrix _trspec[1,4] = 0 0 0 0;
+
+/************************************************/
+/*        Computing Prior Distributions         */
+/************************************************/
+
+proc (1) = priodens(para, pmean, pstdd, pshape);
+/* This procedure computes a prior density for
+** the structural parameters of the DSGE models
+** pshape: 0 is point mass, both para and pstdd are ignored
+**         1 is BETA(mean,stdd)
+**         2 is GAMMA(mean,stdd)
+**         3 is NORMAL(mean,stdd)
+**         4 is INVGAMMA(s^2,nu)
+**         5 is uniform(a,b)
+*/
+local a, b, lnprior, prioinfo, nprio, i;
+lnprior = 0;
+a = 0;
+b = 0;
+
+nprio = rows(pshape);
+prioinfo = zeros(nprio,2) ~ pshape;
+
+i = 1;
+do until i > nprio;
+   if prioinfo[i,3] == 1; /* BETA Prior */
+      a = (1-pmean[i])*pmean[i]^2/pstdd[i]^2 - pmean[i];
+      b = a*(1/pmean[i] - 1);
+      lnprior = lnprior + lpdfbeta(para[i],a,b);   
+   elseif prioinfo[i,3] == 2; /* GAMMA PRIOR */
+      b = pstdd[i]^2/pmean[i];
+      a = pmean[i]/b;
+      lnprior = lnprior + lpdfgam(para[i],a,b);
+   elseif prioinfo[i,3] == 3; /* GAUSSIAN PRIOR */
+      a = pmean[i];
+      b = pstdd[i];
+      lnprior = lnprior + lpdfnor(para[i],a,b);
+   elseif prioinfo[i,3] == 4; /* INVGAMMA PRIOR */
+      a = pmean[i];
+      b = pstdd[i];
+      lnprior = lnprior + lpdfig(para[i],a,b);
+   elseif prioinfo[i,3] == 5; /* Uniform Prior */
+      a = pmean[i];
+      b = pstdd[i];
+      lnprior = lnprior + ln(1/(b-a));
+   endif;
+      prioinfo[i,1] = a;
+      prioinfo[i,2] = b;
+   i = i+1;
+endo;
+
+/*
+prioinfo;
+*/
+/*
+** to run this part, introduce local variables x and y
+graphset;
+begwind;
+window(3,3,0);
+i = 1;
+do until i > nprio;
+   if prioinfo[i,3] == 1;
+      x = seqa(0.01,0.01,98);
+      y = exp(lpdfbeta(x,prioinfo[i,1],prioinfo[i,2]));
+      xy(x,y);
+   endif;
+   nextwind;
+   i=i+1;
+endo;
+endwind;
+*/
+
+retp(lnprior);
+endp;
+
+
+proc(1)= lngam(x);
+/* This procedure computes the log-gamma function
+*/
+local k,lng;
+  if x le 3;
+     lng= ln(gamma(x));
+  else;
+     k = floor(x-2);
+     lng= sumc(ln(seqa(x-1,-1,k))) + ln(gamma(x-k));
+  endif;
+retp(lng);
+endp;
+
+proc(1)= lpdfbeta(x,a,b);
+/* log BETA PDF
+*/
+local ldens;
+  ldens = lngam(a+b) - lngam(a) - lngam(b) + (a-1)*ln(x) + (b-1)*ln(1-x);
+  retp(ldens);
+endp;
+
+proc(1)= lpdfgam(x,a,b);
+/* log GAMMA PDF
+*/
+local ldens;
+  ldens = -lngam(a) -a*ln(b)+ (a-1)*ln(x) -x/b ;
+  retp(ldens);
+endp;
+
+proc(1)= lpdfnor(x,a,b);
+/* log NORMAL PDF
+*/
+local ldens;
+  ldens = -0.5*ln(2*pi) - ln(b) - 0.5*(x-a)^2/b^2;
+  retp(ldens);
+endp;
+
+proc(1) = lpdfig(x,a,b);
+/* log INVERSE GAMMA
+*/
+local ldens;
+   ldens = ln(2) - lngam(b/2) + (b/2)*ln(b*a^2/2) - ( (b+1)/2 )*ln(x^2) - b*a^2/(2*x^2);
+   retp(ldens);
+endp;
+
+proc(1) = lpdfiw(G,H,nu);
+/* log INVERSE WISHART
+*/
+local ldens, m, kap, i;
+
+  m = rows(G);
+  kap = 0;
+  i = 1;
+  do until i > m;
+     kap = kap + lngam(0.5*(nu+1-i));
+     i = i + 1;
+  endo;
+
+  kap = -kap - 0.5*nu*m*ln(2) - 0.25*m*(m-1)*ln(pi);  
+  ldens = kap + 0.5*nu*ln(det(H)) - 0.5*(nu+m+1)*ln(det(G)) - 0.5*sumc(diag(inv(G)*H));
+
+retp(ldens);
+endp;
+
+
+/* Prior Distribution for the Reference Model
+** Intercept but no trend
+*/
+proc (3) = refprior(lambda, YY, XX);
+           local C_bar, CC_bar, VC_inv, y, i,
+           c_hat, CC_hat, SIG, SIG_hat, 
+           nvar,nobs,k;
+
+/* Prior Mean
+*/
+nvar = cols(YY);
+nobs = rows(YY);
+k    = cols(XX);
+
+CC_bar = zeros(nvar,k);
+C_bar = vec(CC_bar');
+
+/* Prior Variance
+*/
+y = vec(YY);
+c_hat   = (eye(nvar) .*. (inv(XX'*XX)*XX'))*y;
+CC_hat  = reshape(c_hat,nvar,k);
+SIG_hat = diag(1/nobs *(YY'-CC_hat*XX')*(YY'-CC_hat*XX')');
+SIG     = (ones(nvar,1)./SIG_hat)*SIG_hat';
+
+VC_inv  = ones(nvar,1)*1E-3;
+i = 1;
+do until i > (k-1)/nvar;
+   VC_inv = VC_inv~SIG.*(i/lambda)^2;
+   i = i+1;
+endo;
+
+VC_inv = eye(nvar*k).*vec(VC_inv');
+retp(C_bar,CC_bar, VC_inv);
+endp;
+
+
+
+/*********************************************************************/
+/*           O P T I M I Z A T I O N   P R O C E D U R E S           */
+/*********************************************************************/
+
+proc (1) = bfgsi(H0,dg,dx);
+/* H = bfgsi(H0,dg,dx)
+** dg is previous change in gradient; dx is previous change in x
+** BFGS update of Hessian matrix.
+*/
+local Hdg, dxdg, H;
+
+Hdg  = H0*dg;
+dxdg = dx'*dg;
+
+if abs(dxdg) > 1e-12;
+   H = H0 + (1+(dg'*Hdg)/dxdg)*(dx*dx')/dxdg - (dx*Hdg' + Hdg*dx')/dxdg;
+   if __output > 0;
+     locate 23,1;
+     "proc BFGSI:     BFGS update successful.";
+   endif;
+else;
+   if __output > 0;
+     locate 23,1;
+     "proc BFGSI:     BFGS update failed.    ";
+   endif;
+     "|dg|   =" sqrt(dg'*dg) " |dx| = " sqrt(dx'*dx);
+     "dx'*dg =" dxdg;
+     "|H*dg| =" Hdg'*Hdg;
+     H=H0;
+endif;
+
+retp(H);
+endp;
+
+
+/***********************************************************************
+***********************************************************************/
+
+proc (4) = csminit(x0,f0,g0,badg,H0,&fcnit);
+/* retcodes: 0, normal step. 5, largest step still improves too fast.
+** 4,2 back and forth adjustment of stepsize didn't finish. 3, smallest
+** stepsize still improves too slow. 6, no improvement found. 1, zero
+** gradient.
+*/
+
+local ANGLE, THETA, FCHANGE, MINLAMB, MINDFAC,
+      fcount, lambda, lambdaht, lambdaMin, lambdaMax, lambdaPeak,
+      xhat, f, fPeak, fhat, g, gnorm,
+      retcode, dx, dxnorm, dfhat, a,
+      done, dxtest, shrink, factor, shrinkSignal, growSignal,
+      fcnit:fn;
+
+ANGLE = .005;
+THETA = .3;
+/* ( 0 < THETA <0.5) THETA near .5 makes long line searches, possibly
+** fewer iterations.
+*/
+
+
+FCHANGE = 1000;
+MINLAMB = 1e-9;
+MINDFAC = .01;
+fcount = 0;
+lambda = 1;
+lambdaht = 1;
+xhat = x0;
+f    = f0;
+fhat = f0;
+g    = g0;
+gnorm = sqrt(g'*g);
+
+if (gnorm < 1e-12) and (badg == 0);
+   retcode = 1;
+   /* gradient convergence */
+   if __output > 0;
+   locate 16,1;
+   "                                                   ";
+   "                                                   ";
+   "                                                   ";
+   "                                                   ";
+   endif;
+else;
+
+   /* with badg true, I don't try to match rate of improvement to directional
+   ** derivative. I am satisfied just to get some improvement in f.
+   */
+   dx = - H0*g;
+   dxnorm = sqrt(dx'*dx);
+   if dxnorm > 1e12;
+      if __output > 0;
+      locate 16,1; "Near singular H problem.";
+      dx = dx*FCHANGE/dxnorm;
+      endif;
+   else;
+      if __output > 0;
+        locate 16,1; "                        ";
+      endif;
+   endif;
+   dfhat = dx'*g0;
+   
+   if badg == 0;
+      /* test for alignment of dx with gradient and fix if necessary
+      */
+      a = -dfhat/(gnorm*dxnorm);
+      if a < ANGLE;
+         dx = dx - (ANGLE*dxnorm/gnorm + dfhat/(gnorm*gnorm))*g;
+         dfhat = dx'*g;
+         dxnorm = sqrt(dx'*dx);
+         if __output > 0;
+           locate 17,1; "Corrected for low angle" a;
+         endif;
+      else;
+         if __output > 0;
+           locate 17,1; "                                               ";
+         endif;
+      endif;
+   endif;
+   
+   if __output > 0;
+     locate 18,1; "Predicted Improvement:" -dfhat/2;
+   endif;
+
+   /* Have ok dx, now adjust length of step until min and max
+   ** improvement rate criteria are met.
+   */   
+   done = 0;
+   factor = 3;
+   shrink = 1;
+   lambdaMin = 0;
+   lambdaMax = 10E6;
+   lambdaPeak = 0;
+   fPeak = f0;
+   lambdaht = 0;
+
+   do while done == 0;
+      dxtest = x0+lambda*dx;
+      f = fcnit(dxtest);
+      if f<fhat;
+         fhat=f;
+         xhat=dxtest;
+         lambdaht=lambda;
+      endif;
+      fcount=fcount+1;
+      shrinkSignal = ( (badg == 0) AND ( f0-f < maxc( -THETA*dfhat*lambda | 0) ) ) OR
+                     ( (badg == 1) AND ( f0-f < 0) );
+      growSignal =  (badg == 0) AND ( (lambda > 0) AND (f0-f > -(1-THETA)*dfhat*lambda) );
+
+      if ( shrinkSignal==1)  AND ( (lambda > lambdaPeak) OR (lambda<0) );
+
+         if (lambda > 0) AND ( (shrink == 0) OR (lambda/factor <= lambdaPEAK));
+            shrink =1;
+            factor = factor^.6;
+            do while lambda/factor <= lambdaPeak;
+               factor = factor^.6;
+            endo;
+            if abs(factor-1)<MINDFAC;
+               retcode = 2;
+               done = 1;
+            endif;
+         endif;
+
+         if (lambda<lambdaMax) AND (lambda > lambdaPeak);  
+            lambdaMax = lambda;
+         endif;
+         lambda = lambda/factor;
+         if abs(lambda) < MINLAMB;
+            if (lambda > 0) AND (f0 <= fhat);
+            /* try going against the gradient which may be inaccurate 
+            */
+               lambda = -lambda*factor^6;
+            else;
+               if lambda < 0;
+                  retcode = 6;
+               else;
+                  retcode = 3;
+               endif;
+               done = 1;
+            endif;
+          endif;
+
+      elseif ( (growSignal == 1) AND (lambda > 0)) OR ( (shrinkSignal ==1) AND 
+             ( (lambda <= lambdaPeak) AND (lambda > 0) ) );
+          
+          if shrink;
+             shrink = 0;
+             factor = factor^.6;
+             if abs(factor-1) < MINDFAC;
+                retcode = 4;
+                done = 1;
+             endif;
+          endif;
+         
+          if (f < fPeak) AND (lambda > 0);
+             fPeak = f;
+             lambdaPeak = lambda;
+             if lambdaMax <= lambdaPeak;
+                lambdaMax = lambdaPeak*factor^2;
+             endif;
+          endif;
+          lambda = lambda*factor;
+          if abs(lambda) > 1e20;
+             retcode = 5;
+             done = 1;
+          endif;
+      
+      else;
+        
+          done = 1;
+          if factor < 1.2;
+             retcode = 7;
+          else;
+             retcode = 0;
+          endif;
+
+      endif;         
+
+    endo;
+
+   if __output > 0;
+    locate 19,1; "lambda, f:" lambda f;
+   endif;
+
+endif;
+
+if __output > 0;
+  locate 20,1; "Retcode  :" retcode;
+endif;
+
+retp(fhat,xhat,fcount,retcode);
+endp;
+
+/**********************************************************************
+**********************************************************************/
+
+proc(2) = numgrad(x0,&fcng);
+/* numgrad computes numerical derivatives
+*/
+local g, gb, i, n, badg, dx, f0, fcng:fn;
+
+/*
+g    = gradp(&fcn, x0)';
+i    = 1;
+n    = rows(x0);
+badg = 0;
+
+do until i > n;
+   if abs(g[i,1]) > 1E20;
+      g[i,1] = 0;
+      badg = 1;
+   endif;
+   i = i+1;
+endo;
+*/
+
+
+i    = 1;
+n    = rows(x0);
+badg = 0;
+g    = zeros(n,1);
+dx   = eye(n)*1E-7;
+f0   = fcng(x0);
+
+do until i > n;
+   g[i,1] = (fcng(x0 + dx[.,i]) - f0)/dx[i,i];
+   if abs(g[i,1]) > 1E20;
+      gb = (f0 - fcng(x0 -dx[.,i]))/dx[i,i];
+      if (gb > 0) and (abs(gb) < 1E15) ;
+         g[i,1] = gb;
+      else;
+         g[i,1] = 0;
+         badg = 1;
+      endif;
+   endif;
+   i = i+1;
+endo;
+
+if __output > 0;
+ locate 22,1; "proc NUMGRAD:   Bad Gradient=" badg;
+endif;
+retp(g,badg);
+endp;
+
+/*********************************************************************
+*********************************************************************/
+
+proc(7) = csminwel(x0,H0,crit,nit, &fcn1);
+/* The procedure numgrad
+** is used to compute numerical derivatives
+*/
+
+local nx, verbose, itct, fcount, snit, f0, x, f, H, fh, xh, fc,
+      done, cliff, Hcliff, gcliff, 
+      retcode, fhat, xhat, Hhat, g, rc, badg, 
+      retcode1, retcode2, retcode3, retcodeh, retcodei,
+      wall1, wall2, wall3, badg1, badg2, badg3, badgh, 
+      f1, f2, f3, g1, g2, g3, gh,
+      x1, x2, x3, xi, ih, stuck,
+      fcn1:proc;
+
+nx      = rows(x0);
+verbose = 1;
+done    = 0;
+itct    = 0;
+fcount  = 0;
+snit    = 100;
+fhat    = 0;
+xhat    = zeros(nx,1);
+g       = zeros(nx,1);
+Hhat    = H0;
+retcode = 10;
+
+if __output > 0;
+@cls;@
+locate 1,20; "Numerical Minimization with CSMINWEL";
+locate 2,20; "====================================";
+locate 14,1; "-------------------------------------------------------------";
+locate 15,1; "proc CSMINIT";
+locate 21,1; "-------------------------------------------------------------";
+endif;
+
+/* Evaluate function at initial value
+*/
+
+f0 = fcn1(x0);
+if f0 > 1e25;
+   "Bad initial parameter";
+   goto ENDPROC;
+endif;
+
+
+/* Compute numerical derivative at x0
+*/
+
+{g, badg} = numgrad(x0,&fcn1);
+ 
+retcode3 = 101;
+x = x0;
+f = f0;
+H = H0;
+cliff = 0;
+
+do while done == 0;
+
+   /* pause(2); */
+   {f1, x1, fc, retcode1} = csminit(x,f,g,badg,H,&fcn1);
+    itct = itct+1;
+   fcount = fcount + fc;
+
+
+   if retcode1 NE 1;
+      if (abs(retcode1) == 2) or (abs(retcode1) == 4);
+         badg1 = 1;
+      else;
+         {g1, badg1} = numgrad(x1,&fcn1);
+      endif;
+      wall1 = badg1;
+ 
+      if wall1 == 1;
+         
+         /* back and forth on step length. Possibly on cliff edge
+         ** try perturbing search direction
+         */
+         Hcliff = H + eye(nx) .* ( diag(H) .* rndu(nx,1) );
+         if __output > 0;
+           locate 3,1; "Cliff. Perturbing search direction";
+         endif;
+         {f2, x2, fc, retcode2} = csminit(x,f,g,badg,Hcliff,&fcn1);
+         fcount = fcount + fc;
+         
+         if f2 < f;
+
+            if (retcode2 == 2) OR (retcode2 == 4);
+               wall2=1; badg2=1;
+            else;
+               {g2, badg2} = numgrad(x2,&fcn1);
+               wall2 = badg2;
+            endif;
+                
+            if wall2 == 1;
+               if __output > 0;
+                 locate 3,1; "Cliff Again. Try traversing    ";
+               endif;
+               if sqrt( (x2-x1)'*(x2-x1) ) < 1e-13;
+                  f3=f; x3=x; retcode3=101;
+               else;
+                  gcliff=(  (f2-f1)/sqrt((x2-x1)'*(x2-x1)))*(x2-x1);
+                  {f3,x3,fc,retcode3} = csminit(x, f, gcliff, 0, eye(nx), &fcn1);
+                  fcount = fcount + fc;
+                  if (retcode3) == 2 OR (retcode3==4);
+                     wall3=1; badg3=1;
+                  else;
+                    {g3, badg3} = numgrad(x3,&fcn1); 
+                    wall3=badg3;
+                  endif;
+               endif;              
+            else;
+              f3=f; x3=x; badg3=1; retcode3=101;
+            endif;
+    
+         else;
+           f3=f; x3=x; badg3=1; retcode3=101;
+         endif;
+
+      else;
+        /* normal iteration, no walls, or else we're finished here.
+        */
+        if __output > 0;
+         locate 3,1; "                                        ";
+        endif;
+        f2=f; f3=f; x2=x; x3=x; badg2=1; badg3=1; retcode2=101; retcode3=101;
+      endif;
+   else;
+      if __output > 0;
+        locate 3,1; "                                       ";
+      endif;
+      f2=f;f3=f;x2=x;x3=x;badg3=badg;badg2=badg; badg1=badg; retcode2=retcode1;
+      retcode3=retcode1;
+   endif;
+
+   /* how to pick gh and xh
+   */
+   if (f3<f) AND (badg3 == 0);
+      ih=3;
+      fh=f3; xh=x3; gh=g3; badgh=badg3; retcodeh=retcode3;
+   elseif (f2<f) AND (badg2 == 0);
+      ih=2;
+      fh=f2; xh=x2; gh=g2; badgh=badg2; retcodeh=retcode2;
+   elseif (f1<f) AND (badg1 == 0);
+      ih=1;
+      fh=f1; xh=x1; gh=g1; badgh=badg1; retcodeh=retcode1;
+   else;
+      fh = minc(f1|f2|f3);
+      ih = minindc(f1|f2|f3);
+      xi = x1~x2~x3;
+      xh = xi[.,ih];
+      retcodei = (retcode1|retcode2|retcode3);
+      retcodeh = retcodei[ih];
+      {gh, badgh} = numgrad(xh,&fcn1);
+      badgh=1;
+   endif;
+
+   stuck = (abs(fh-f) < crit);
+   if (badg ==0) AND (badgh == 0) AND (stuck == 0);
+      H = bfgsi(H,gh-g,xh-x);
+   endif;
+
+   if __output > 0;
+      locate 4,1;
+      cls;
+      "Improvement on Iteration" itct "is" f-fh;
+   endif;
+
+   if verbose == 1;
+
+      if itct > nit;
+         if __output > 0;
+          locate 5,1;
+          "Iteration count termination              ";
+         endif;
+         done = 1;
+      elseif stuck == 1;
+         if __output > 0;
+          locate 5,1;
+          "Improvement is less than crit termination";
+         endif;
+         done = 1;
+      else;
+         if __output > 0;
+          locate 5,1;
+          "                                         ";
+         endif;
+      endif;
+      rc = retcodeh;
+      if __output > 0;
+      locate 6,1;
+      if rc == 1;
+         "zero gradient";
+      elseif rc == 6;
+         "smallest step still improving too slow, reversed gradient";
+      elseif rc == 5;
+         "largest step still improving too fast                    ";
+      elseif (rc == 4) OR (rc ==2);
+         "Back and forth on step lengh never finished              ";
+      elseif rc == 3;
+         "smallest step still improving too slow                   ";
+      elseif rc == 7;
+         "Warning: possible inaccuracy in H matrix                 ";
+      else;
+         "                                                         ";
+      endif;
+      endif;
+
+   endif;
+   f= fh;
+   x= xh;
+   g= gh;
+   badg = badgh;
+   if __output > 0;
+    locate 7,1; "Function Value" f;
+    locate 8,1; "Parameter Values"; trans(x)';
+   endif;
+endo;
+
+ENDPROC:
+   
+retp(fh,xh,g,H,itct,fcount,retcode);
+endp;
+
+/*************************************************************************
+*************************************************************************/
+
+
+
+/*********************************************************************/
+/*           P A R A M E T E R   T R A N S F O R M A T I O N S       */
+/*********************************************************************/
+
+proc(1) = trans(para);
+/* this procedure transforms variables from max to model
+*/
+local a,b,c,npara,i;
+
+npara = rows(para);
+
+i = 1;
+do until i > npara;
+
+   a = _trspec[i,2];
+   b = _trspec[i,3];
+   c = _trspec[i,4];
+
+   if _trspec[i,1] == 1;
+     
+     para[i] = (a+b)/2 + 0.5*(b-a)*c*para[i]/sqrt(1+c^2*para[i]^2);
+     
+     /*
+     para[i] = a + (b-a)*cdfn(c*para[i]);
+     */
+   elseif _trspec[i,1] ==2;
+     para[i] = a + exp(c*(para[i]-b));
+   endif;
+
+   i = i+1;
+
+endo;
+retp(para);
+endp;
+
+
+proc(1) = invtrans(para);
+/* this procedure transforms variables from model to max
+** Note that the max parameter do not contain para 8 and 9
+*/
+local a,b,c,npara,i,cx;
+
+npara = rows(para);
+
+i = 1;
+do until i > npara;
+
+   a = _trspec[i,2];
+   b = _trspec[i,3];
+   c = _trspec[i,4];
+
+   if _trspec[i,1] == 1;
+     cx = 2*(para[i]-(a+b)/2)/(b-a);
+     para[i] = (1/c)*cx/sqrt(1-cx^2);
+   elseif _trspec[i,1] ==2;
+     para[i] = b + (1/c)*ln(para[i]-a);
+   endif;
+
+   i = i+1;
+
+endo;
+retp(para);
+endp;
+
+/*********************************************************************/
+/*  M I S C E L L A N E O U S    M A T R I X   O P E R A T I O N S   */
+/*********************************************************************/
+
+proc(1) =symmat(a);
+/* procedure returns a symmetrized matrix
+*/
+local i, n;
+n = rows(a);
+i = 1;
+do until i > n-1;
+   a[i+1:n,i] = a[i,i+1:n]'; 
+   i = i+1;
+endo;
+retp(a);
+endp;
+
+proc (1) = lowtrvec(a);
+/* procedure stacks the lower triangular
+** elements of a matrix
+*/
+local ndim, i, b;
+ndim = rows(a);
+b = a[.,1];
+i = 2;
+do until i > ndim;
+   b = b | a[i:ndim,i];
+   i = i+1;
+endo;
+retp(b);
+endp;
+
+proc (1) = lowtrmat(b);
+/* procedure creates a symmetric matrix
+*/
+local i, a, bu, bl, ndim;
+
+ndim = floor(sqrt(rows(b)*2 + 1/4) - 1/2);
+a = zeros(ndim,ndim);
+bu = 1;
+bl = ndim;
+i = 1;
+do until i > ndim;
+   a[i:ndim,i] = b[bu:bl];
+   a[i,i:ndim] = b[bu:bl]';
+   bu = bl+1;
+   bl = bl+(ndim-i);
+   i = i+1;
+endo;
+retp(a);
+endp;
+
+
+proc (1) = cholpsd (A);
+/* This procedure computes a Cholesky Decomposition for
+** positive definite matrices
+*/
+local B, n, k, j;
+
+B = A;
+n = rows(B);
+k = 1;
+do until k > n;
+   if B[k,k] > 0;
+      B[k,k] = sqrt(B[k,k]);
+      if k < n;
+         B[k+1:n,k] = B[k+1:n,k]/B[k,k];
+         B[k,k+1:n] = zeros(1,n-k);
+         j = k+1;
+         do until j > n;
+           B[j:n,j] = B[j:n,j] - B[j:n,k]*B[j,k];
+           j = j+1;
+         endo;
+      endif;
+   endif;
+   k = k+1;
+endo;
+
+retp(B);
+endp;

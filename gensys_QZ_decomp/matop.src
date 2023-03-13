@@ -1,0 +1,82 @@
+/***************************************************
+**
+** Procedures to analyze matrices:
+**
+** x = dlyap(a,q)
+**
+*/
+
+
+proc (1) = dlyap(a,c);
+/* Discrete Lyapunov Equation Solver
+** X = DLYAP(A,Q) solves the discrete Lyapunov Equation
+** AXA' - X+Q = 0
+*/
+local b,
+      ma, na, mb, nb, mc, nc,
+      ua, ta, ub, tb,
+      ucu, y, ema, x,
+      k, km1; 
+
+
+ma = rows(a);
+na = cols(a);
+
+mc = rows(c);
+nc = cols(c);
+
+/* Check dimension of matrices
+** omitted
+*/
+
+a = inv( a+eye(ma) )*( a-eye(ma) );
+c = 0.5*( eye(ma)-a )*c*( eye(ma)-a' );
+b = a';
+
+mb = rows(b);
+nb = cols(b);
+
+/* Perform Schur decomposition on A and convert to complex form
+*/
+{ta, ua} = schtoc(schur(a));
+{tb, ub} = schtoc(schur(b));
+
+/* check all combinations of ta[i,i]+tb[j,j] for zero
+** omitted
+*/
+
+/* Transform C
+*/
+ucu = -ua'*c*ub;
+
+/* solve for first column of transformed solution
+*/
+y = zeros(ma,mb);
+ema = eye(ma);
+y[.,1] = inv(ta + ema*tb[1,1])*ucu[.,1];
+
+/* solve for remaining columns of transformed solution
+*/
+k = 2;
+do until k > mb;
+   km1 = seqa(1,1,k-1);
+   y[.,k] = inv( ta+ema*tb[k,k] )*( ucu[.,k] - y[.,km1]*tb[km1,k] ); 
+   k = k+1;
+endo;
+   
+/* Find untransformed solution
+*/
+X = ua*y*ub';
+
+/* Ignore complex part
+*/
+X = real(X);
+
+/* Force X to be symmetric if C is symmetric
+*/
+if C == C';
+   X = 0.5*(X+X');
+endif;
+
+retp(X);
+endp;

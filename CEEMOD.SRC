@@ -1,0 +1,282 @@
+/*******************************************************
+**   Solve New Keynesian Business Cycle Model
+*******************************************************/
+proc (4) = dsgesolv(para);
+
+local  h,  sigma_c,  sigma_L,   beta,   phi,  tau,   Rk,  gam_p,
+      gam_w,  psi_p,  psi_w,  alpha,  psi,  k_y, g_y,  rho_m, 
+      rho_c, rho_i, rho_L, rho_z, rho_g, phi0, lambda_w, xi_p, xi_w, 
+     mu_pi,  mu_y,  e_c,  e_inv,  e_q,  e_L, e_w, e_z, e_p, e_g,  e_m,
+      neq,nex,nend,T1,TC,T0,TY,M,TZ,TETA,GEV,RC,
+      GAM0,GAM1,C,PSI0,PPI,
+      ETA1_wt, ETA2_wt, ETA2_u, ETA2_d, ETA2_v, ETA2_vnull, ETA2_rank,
+       TRANS_mat, G0, G0_inv, 
+      nexpl;
+
+
+/* assign names to parameters
+*/
+
+  beta    =  0.99 ;
+  tau     =  0.025;
+  alpha   =  0.3;
+   k_y     = 2*4; //8;  4.5;
+   g_y     = 0.2;  // 0.2;
+   lambda_w  = 0.05;  
+   Rk      = 1 / beta - (1-tau);
+
+  
+   h       = para[1];
+   sigma_c = para[2];
+   sigma_L = para[3];
+   phi     = 1/para[4];        @Inverse Adj Cost@ 
+   phi0    =  para[5];       @Fixed Cost Share @
+   psi     = para[6];         @ capital utilization cost  @
+   gam_p   = para[7];
+   gam_w   = para[8];
+   xi_p    =  para[9];         
+   xi_w    =  para[10];  
+   rho_m   = para[11];
+   mu_pi   = para[12];
+   mu_y    = para[13];
+   rho_z  = para[14];
+   rho_c  = para[15];
+   rho_g  = para[16];
+   rho_L  = para[17];
+   rho_i  = para[18]; 
+   e_c     = para[19];
+   e_inv   = para[20];
+   e_q     = para[21];
+   e_L     = para[22];
+   e_w     = para[23];
+   e_z     = para[24];
+   e_p     = para[25];  
+   e_g     = para[26];
+   e_m     = para[27];
+   
+
+  psi_w = (1-beta*xi_w)*(1-xi_w)  /  (1 + (1+lambda_w)*sigma_L / lambda_w ) / xi_w;
+
+  psi_p = (1-beta*xi_p)*(1-xi_p)/ xi_p ;
+
+/* define matrices of canonical system
+*/
+   neq  = 21;      @  Num of stable and unstable Variables @ 
+   nex  = 9;       @  Num of Shock                         @
+   nend = 6;       @  Num of Unstable Variables            @ 
+
+/*
+** [y,p,m,xi_y,xi_p,z]'
+**     y  : output
+**     pi  : inflation
+**     xi_y: expected output
+**     xi_pi: expected inflation
+**
+**     shocks: [eps_i]
+*/  
+
+   GAM0 = zeros(neq,neq);
+   GAM1 = zeros(neq,neq);
+   C = zeros(neq,1);
+   PSI0 = zeros(neq,nex);
+   PPI = zeros(neq,nend);
+
+/* Consumption Euler  */
+
+   GAM0[1,7] = 1;
+   GAM0[1,8] = (1-h)/((1+h)*sigma_c);
+   GAM0[1,11] = -(1-h)/((1+h)*sigma_c);
+   GAM0[1,15] = -1/(1+h);
+   GAM0[1,17] = -(1-h)*(1-rho_c)/((1+h)*sigma_c);   
+
+   GAM1[1,7] = h/(1+h);
+   
+/* Investment Euler  */
+
+   GAM0[2,5] = -(phi)/(1+beta);
+   GAM0[2,6] = 1;
+   GAM0[2,14] = -(beta)/(1+beta);
+   GAM0[2,18] = -beta*(1-rho_i)/(1+beta);
+
+   GAM1[2,6] = 1/(1+beta);
+   
+      
+/*  Tobin's q  */   
+   GAM0[3,5] = 1;
+   GAM0[3,8] = 1;
+   GAM0[3,11] = -1;
+   GAM0[3,13] = -(1-tau)/(1-tau+Rk);
+   GAM0[3,16] = -(Rk)/(1-tau+Rk);
+
+   PSI0[3,3] = 1;
+   
+            
+/* Wage setting  */
+   GAM0[4,2] = (1+beta*gam_w)/(1+beta);
+   GAM0[4,3] = 1+ (psi_w)/(1+beta);
+   GAM0[4,7] = -(sigma_c*psi_w)/((1+beta)*(1-h));
+   GAM0[4,10] = -(sigma_L*psi_w)/(1+beta);
+   GAM0[4,11] = -(beta)/(1+beta); 
+   GAM0[4,12] = -(beta)/(1+beta); 
+   GAM0[4,19] =  -psi_w/(1+beta);
+
+   GAM1[4,2] = gam_w/(1+beta);
+   GAM1[4,3] = 1/(1+beta);
+   GAM1[4,7] = -(sigma_c*psi_w*h)/((1+beta)*(1-h));
+   
+   PSI0[4,5]  = psi_w/(1+beta);
+   
+/* Production function */
+   GAM0[5,1] = 1;
+   GAM0[5,9] = -phi0*alpha*psi;
+   GAM0[5,10] = -phi0*(1-alpha);
+   GAM0[5,20] = -phi0;
+
+   GAM1[5,4] = phi0*alpha;
+    
+/* Labour demand  */
+   GAM0[6,3] = 1;
+   GAM0[6,9] = -(1+psi);
+   GAM0[6,10] = 1;
+
+   GAM1[6,4] = 1;
+
+/* price setting */
+   GAM0[7,2] = 1;
+   GAM0[7,3] = -(psi_p*(1-alpha))/(1+beta*gam_p);
+   GAM0[7,9] = -(psi_p*alpha)/(1+beta*gam_p);
+   GAM0[7,11] = -(beta)/(1+beta*gam_p); 
+   GAM0[7,20]  = psi_p/(1+beta*gam_p);
+
+   GAM1[7,2] = gam_p/(1+beta*gam_p);
+      
+   PSI0[7,7]  = psi_p/(1+beta*gam_p);
+
+/* resource constraint  */
+   GAM0[8,1] = 1;
+   GAM0[8,6] = -tau*k_y ;
+   GAM0[8,7] = -(1-tau*k_y-g_y);
+   GAM0[8,9] = - Rk*psi *k_y;
+   GAM0[8,21] = -g_y;
+
+/*  capital accumulation */
+   GAM0[9,4] = 1;
+
+   GAM1[9,4] = 1-tau ;
+   GAM1[9,6] = tau ;
+
+/*  monetary policy rule */
+
+    GAM0[10,1] = -(1-rho_m)*mu_y ;
+    GAM0[10,8] =  1 ;
+    
+    GAM1[10,2] = (1-rho_m)*mu_pi ;
+    GAM1[10,8] = rho_m ;
+
+    PSI0[10,9] =  1 ;
+
+/* Forecast Error in Inflation */
+   GAM0[11,2] = 1;
+   
+   GAM1[11,11] = 1;
+   
+   PPI[11,1]  = 1;
+
+/* Forecast Error in Wage */
+   GAM0[12,3] = 1;
+   
+   GAM1[12,12] = 1;
+   
+   PPI[12,2]  = 1;
+
+/* Forecast Error in Tobin's q */
+   GAM0[13,5] = 1;
+   
+   GAM1[13,13] = 1;
+   
+   PPI[13,3]  = 1;
+
+/* Forecast Error in Investment */
+   GAM0[14,6] = 1;
+   
+   GAM1[14,14] = 1;
+   
+   PPI[14,4]  = 1;
+
+/* Forecast Error in consumption */
+   GAM0[15,7] = 1;
+   
+   GAM1[15,15] = 1;
+   
+   PPI[15,5]  = 1;
+
+/* Forecast Error in capital */
+   GAM0[16,9] = 1;
+   
+   GAM1[16,16] = 1;
+   
+   PPI[16,6]  = 1;
+
+/* Comsumption  Shock*/
+
+   GAM0[17,17] = 1;
+
+   GAM1[17,17] = rho_c;
+
+   PSI0[17,1] = 1;
+
+/* Investment  Shock*/
+
+   GAM0[18,18] = 1;
+
+   GAM1[18,18] = rho_i;
+
+   PSI0[18,2] = 1;
+
+/* Labor  Shock*/
+
+   GAM0[19,19] = 1;
+
+   GAM1[19,19] = rho_L;
+
+   PSI0[19,4] = 1;
+
+/* Productivity Shock*/
+
+   GAM0[20,20] = 1;
+
+   GAM1[20,20] = rho_z;
+
+   PSI0[20,6] = 1;
+
+/* Fiscal Policy  Shock*/
+
+   GAM0[21,21] = 1;
+
+   GAM1[21,21] = rho_g;
+
+   PSI0[21,8] = 1;
+ 
+      
+/* QZ(generalized Schur) decomposition by GENSYS
+*/
+
+{T1,TC,T0,TY,M,TZ,TETA,GEV,RC} = gensys(GAM0,GAM1,C,PSI0,PPI,1,1);
+
+/* Add y(t-1) to the state vector
+
+T1   = ( T1 ~ zeros(neq,1) )|
+       ( 1 ~ zeros(1,neq) );
+TC   = TC | 0;
+T0   = T0 | zeros(1,cols(T0));
+TETA = TETA | zeros(1,cols(TETA));
+*/
+
+retp(T1,TC,T0, RC);
+endp;
+
+
+/*
+retp(real(T1),real(TC),real(T0),RC);
+endp;
+*/

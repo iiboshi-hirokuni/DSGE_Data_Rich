@@ -1,0 +1,618 @@
+/******************************************************/
+proc (1) = make_zz(nstate);
+
+local zz,  i, max_data;
+  
+max_data = rows(case_c_zz);
+
+zz = zeros(max_data, nstate);
+
+i = 1;
+do until i > max_data;
+
+   zz[i,case_c_zz[i,2]] = case_c_zz[i,5];
+
+   i = i + 1;
+
+endo;
+
+retp(zz);
+endp;
+
+/******************************************************/
+proc (1) = make_init(yy, nstate);
+
+local at, i, max_data;
+
+
+max_data = rows(case_c_zz);
+
+At = zeros(nstate,1); 
+
+i = 1;
+do until i > max_data;
+
+   if case_c_zz[i,3] == 1;
+
+     at[case_c_zz[i,2]] = yy[1, i ]/case_c_zz[i,5];
+ 
+     at[nstate/2+case_c_zz[i,2]] = yy[1, i ]/case_c_zz[i,5];
+    
+   endif;
+
+   i = i + 1;
+
+endo;
+
+retp(at);
+endp;
+
+/******************************************************/
+proc (3) = simulation_smoother(Z1, HH, para,psi);
+
+local npara, para1, para2, nobs, obsmean, obssmooth, 
+      obsvar, obssample,nseries, nstate,
+      nu_save, ft_save, kg_save,at_save, pt_save, 
+      st_save,  shock_tmp,index, i, st, st1,
+      ystar, rr, ZZ,retcode, 
+      r_t, n_t,l_t, w_t,c_t, d,e,eta,
+      DD, QQ, VV,k_g, tt,tc,teps,rc,t1,r1,
+      t, At, Pt, At1, Pt1, Phat, yhat, nu, Ft, 
+      alphahat, alpha_t, v_t, a1, p1, kentry;
+
+/* solve the DSGE model
+*/
+{T1, TC, TEPS,RC} = dsgesolv(para);  /* solve dsge */
+
+            if (RC[1] == 1) and (RC[2]==1);
+                  /* determinacy */
+                  retcode_1 = 0;
+             elseif (RC[1] == 1) and (RC[2]==0) ;
+                  /* indeterminacy */
+              retcode_1 = 0;
+             endif;
+
+  R1 = Teps;
+
+/*****************************************************/
+
+ystar = YY[2:rows(YY),.]- psi'.*YY[1:rows(YY)-1,.];
+
+npara    = rows(para);
+nobs     = rows(Ystar);
+nstate   = 2*cols(T1);
+nseries  = cols(YY);
+
+obsmean   = zeros(nobs,nseries);
+obssmooth = zeros(nobs,nseries);
+obssample = zeros(nobs, nstate/2 );
+nu_save   = zeros(nseries,nobs);
+ft_save   = zeros(nseries,nseries*nobs); 
+kg_save   = zeros(nstate,nseries*nobs);
+ 
+at_save   = zeros(nstate,nobs);
+pt_save   = zeros(nstate,nstate*nobs); 
+
+TT = T1~zeros(nstate/2,nstate/2)|
+     eye(nstate/2)~zeros(nstate/2,nstate/2);
+RR = R1|zeros(nstate/2,9);
+ZZ = Z1~(-1)*psi.*Z1;
+
+QQ = createcov(para[19:27,1]);
+
+DD  = zeros(nseries,1); 
+VV = zeros(9,nseries);
+
+// initial value of state variables
+At = make_init(yy, nstate);
+
+a1 = at;                                 // initial value of state variables
+Pt = dlyap(TT,RR*QQ*RR');   p1 = pt;     // variance 
+
+/* Kalman filter by Durbin & Koopman (2001, p67)
+*/
+t = 1;
+do until t > nobs;
+
+   At1 = At;
+   Pt1 = Pt;
+
+   /* Forecasting
+   */
+   alphahat = TT*At1;   
+
+   Phat = TT*Pt1*TT' + RR*QQ*RR';
+   yhat = ZZ*alphahat + DD;
+   nu   = Ystar[t,.] - yhat';   // one-step forecast error
+   obsvar    = zeros(nobs,cols(YY));
+
+   
+   Ft   = ZZ*Phat*ZZ' + HH + ZZ*RR*VV + (ZZ*RR*VV)';  
+   Ft   = 0.5*(Ft + Ft');
+
+   K_g = TT*Phat*ZZ'*inv(Ft);   // Kalman Gain
+
+   at_save[.,t] = alphahat;
+   Pt_save[.,(t-1)*nstate+1:t*nstate] = Phat;
+
+    /* Updating
+   */
+   At = alphahat + (Phat*ZZ' + RR*VV)*inv(Ft)*nu';
+   Pt = Phat - (Phat*ZZ'+RR*VV)*inv(Ft)*(Phat*ZZ'+RR*VV)';
+
+   /*  store  
+   */
+   obsmean[t,.] = (Z1*alphahat[1:21])';
+   obsvar[t,.]  = diag(Ft)';
+   nu_save[.,t] = nu';
+   Ft_save[.,(t-1)*nseries+1:t*nseries] = Ft;
+   Kg_save[.,(t-1)*nseries+1:t*nseries] = K_g;
+   
+    t = t+1;
+
+endo;  
+
+/* state smoothing by Durbin & Koopman (2001, p73)
+ */
+/*
+r_t = zeros(nstate,1);  N_t = zeros(nstate,nstate); 
+eta = zeros(8,nobs);
+
+t = nobs; 
+do until t < 1;
+nu = nu_save[.,t];
+Ft =  Ft_save[.,(t-1)*nseries+1:t*nseries];
+K_g = Kg_save[.,(t-1)*nseries+1:t*nseries];
+phat = pt_save[.,(t-1)*nstate+1:t*nstate];
+L_t = TT- K_g*ZZ; 
+
+r_t = ZZ'*inv(Ft)*nu + L_t'*r_t;        //4.32
+N_t = ZZ'*inv(Ft)*ZZ + L_t'*N_t*L_t;
+alpha_t = at_save[.,t] + Phat * r_t;     
+V_t   = phat - phat*N_t*phat; 
+
+yhat  = ZZ * alpha_t;
+obssmooth[t,.] = yhat';
+
+t = t-1;
+endo;
+*/
+
+/* Simulation smoother  by DeJong & Shephard (1995)
+*/
+
+r_t = zeros(nstate,1);  N_t = zeros(nstate,nstate); 
+eta = zeros(9,nobs);
+d = rndn(9,nobs); 
+
+t = nobs; 
+do until t < 1;
+nu = nu_save[.,t];
+Ft =  Ft_save[.,(t-1)*nseries+1:t*nseries];
+K_g = Kg_save[.,(t-1)*nseries+1:t*nseries];
+L_t = TT - K_g*ZZ; 
+
+W_t = QQ*RR'*N_t*L_t;             // 4.78 
+c_t = QQ - QQ*RR'*N_t*RR*QQ;      // 4.83
+c_t   = 0.5*(c_t + c_t');   
+
+// positive definite
+if    ( det(c_t[1,1])>0 )and (det(c_t[1:2,1:2])>0)and (det(c_t[1:3,1:3])>0)
+   and (det(c_t[1:4,1:4])>0)and (det(c_t[1:5,1:5])>0) and (det(c_t[1:6,1:6])>0)
+   and (det(c_t[1:7,1:7])>0)and (det(c_t[1:8,1:8])>0)and (det(c_t[1:9,1:9])>0);
+  
+     e= chol(c_t)*d[.,t];  
+
+else;
+     e= diag(c_t).*d[.,t]; "c_t is not positive definite"; 
+endif;
+
+eta[.,t] = e+ QQ*RR'*r_t;      // 4.84
+
+/*  backward     */   
+r_t = ZZ'*inv(Ft)*nu - W_t'*inv(c_t)*e + L_t'*r_t;        //4.75
+N_t = ZZ'*inv(Ft)*ZZ + W_t'*inv(c_t)*W_t + L_t'*N_t*L_t;
+
+t = t-1;
+endo;
+
+/*  sampling state variables   */
+
+alpha_t = a1 + p1*r_t;  // initialize
+t = 1;
+do until t > nobs;
+   obssample[t,.] = ( alpha_t[1:21])';
+   alpha_t = tt * alpha_t + RR * eta[.,t];   // 4.85
+
+   t = t + 1;
+endo;
+
+/*   historical decomposition
+*/
+st_save = zeros(nobs,ndata*9);
+index = 1;
+do until index > 9;
+   
+   st1 = (a1 + p1*r_t)*qq[index,index]/sumc(diag(qq)) ;   // initialize
+   
+  i = 1;
+  do until i > nobs;   
+        st_save[i,1+(index-1)*ndata:index*ndata] = (z1*st1[1:21])';
+    
+     shock_tmp = zeros(9,1);
+     shock_tmp[index] = eta[index,i];        
+     
+         //st = tt*st1 + rr*eta[.,i];      
+     st = tt*st1 + rr*shock_tmp; 
+        //st_save[i,1+(index-1)*11:index*11] = (z1*st[1:21])';
+     
+    st1 = st;
+    i = i + 1;
+  endo; 
+
+  index = index + 1 ;
+
+endo;
+
+retp(obssample, eta, st_save);
+endp;
+
+/**********************************************/
+
+proc (2) = coef_g(SS, HH, psi, zz) ;
+
+local i, k, j, m, l, yy1,num, resid, YSTAR, XSTAR, tstar,
+      V, gam, gam_g, gam_tmp, c, sig2_v, t0, R0, accept, 
+	  n_info, zz1, zz2,n_index, table, table1 ;
+
+      gam = zz;
+	  
+	  num = cols(yy);    /* number of  observable variables */
+
+      yy1 = yy[2:rows(yy),.];     
+
+     ystar = YY1[2:rows(YY1),.]- psi'.*YY1[1:rows(YY1)-1,.];  
+               
+      tstar = rows(ystar);
+	  
+	  j = 1;  zz1={}; n_index=0; table={};
+	  do until j > ndata;
+	        if case_c_zz[j,4]==1;
+	            n_index = n_index + 1;
+				
+				table1 = case_c_zz[j,2];
+				table = table | table1; 
+				
+				zz2 = zeros(1,cols(zz));
+				zz2[1,case_c_zz[j,2]]=1;
+                zz1 = zz1|zz2;				
+		    endif;
+	     j = j + 1;
+	  endo;	 
+	  
+	 i = 1;
+     gam_g      = zeros(num,1);
+     
+     do until i > num; 
+
+          k = case_c_zz[i,1];  l=case_c_zz[i,2]; 
+
+         if case_c_zz[i,4] == 1;
+               gam_g[i] = 1;
+
+		 
+		 elseif case_c_zz[i,4] == 2; 
+              t0 = case_c_zz[i,10];
+              R0 = case_c_zz[i,11];
+      
+              xstar = ss[2:rows(YY1),l] - psi[i]* ss[1:rows(YY1)-1,l] ;
+
+              sig2_v   = HH[i,i];
+              V        = invpd(R0^(-1) + SIG2_V^(-1)*XSTAR[.,1]'* XSTAR[.,1] );
+              gam_tmp =  V*(R0^(-1)*t0 + SIG2_V^(-1)*XSTAR[.,1]'* YSTAR[.,k] );
+              C        = chol(V);
+        
+              gam_g[i] = gam_tmp + C'rndn(1,1);
+			  
+			  gam[k,l] = gam_g[i];          
+        
+    	elseif case_c_zz[i,4] == 3;
+		              xstar = ss[2:rows(YY1),.]*ZZ1'- psi[i]*( ss[1:rows(YY1)-1,.]*ZZ1') ;
+			  
+			  t0 = ones(n_index,1)*case_c_zz[i,9];
+			  R0 = eye(n_index)*case_c_zz[i,10]^(-1); 
+              
+			  sig2_v   = HH[i,i];           
+              V        = invpd(R0 + SIG2_V^(-1)*XSTAR[.,1:n_index]'* XSTAR[.,1:n_index] );
+              gam_tmp =  V*(R0*t0 + SIG2_V^(-1)*XSTAR[.,1:n_index]'* YSTAR[.,i] ); 
+              
+			  C        = chol(V);
+              gam_tmp = gam_tmp + C'rndn(n_index,1);
+
+              m = 1;
+		      do until m > n_index;
+				 gam[i,table[m]] = gam_tmp[m];
+				 
+				 if table[m] == case_c_zz[i,2];
+				    gam_g[i] = gam_tmp[m];
+				 endif; 
+				 
+				 m = m+1;
+			  endo;		
+         
+         endif;
+          
+          
+          i = i + 1;
+      endo;   
+
+ retp(gam, gam_g);
+
+endp;
+
+/*********************************************/
+
+proc (1) = coef(SS, HH,zz );
+
+local i, yy1,num, resid, YSTAR, XSTAR, tstar,
+      V, psi, psi_g, c, sig2_v,t0, R0, accept ;
+
+      num = cols(yy);    /* number of  observable variables */
+      yy1 = yy[2:rows(yy),.];
+      resid  = YY1 - ss*ZZ';
+      
+      YSTAR = resid[2:rows(resid),.];
+
+      XSTAR = resid[1:rows(resid)-1,.];
+          
+      tstar = rows(ystar);
+
+     i = 1;
+     psi_g = zeros(num,1);
+     psi   = zeros(num,1);
+
+     do until i > num;
+
+        if case_c_zz[i,2]== 4; // nominal interest rate
+            psi_g[i] = 0;
+       
+        else;
+
+           t0 = case_c_zz[i,6];
+           R0 = case_c_zz[i,7];
+              
+           sig2_v = HH[i,i];
+           V = invpd(R0^(-1) + SIG2_V^(-1)*XSTAR[.,i]'* XSTAR[.,i] );
+           PSI[i] =  V*(R0^(-1)*t0 + SIG2_V^(-1)*XSTAR[.,i]'* YSTAR[.,i] );
+           C = chol(V);
+
+            ACCEPT = 0;
+
+            do while ACCEPT ==0;
+                PSI_G[i] = PSI[i] + C'rndn(1,1);
+               if  abs( psi_g[i] ) < 1 ;
+                     ACCEPT = 1;
+               else;
+                     ACCEPT = 0;
+               endif;
+            endo;
+         endif;
+
+         i = i + 1;
+      endo;
+
+retp(psi_g);
+endp;
+
+/*********************************************/
+
+proc(1) = sig(ss, psi, zz);
+
+local i, yy1, ystar, xstar, num, c, nn,d,t2,
+      resid, omega, sig2_v, d0_, v0_;
+
+     num = cols(yy);    /* number of  observable variables */
+     yy1 = yy[2:rows(yy),.];     
+
+     ystar = YY1[2:rows(YY1),.]- psi'.*YY1[1:rows(YY1)-1,.];  
+     xstar = ss[2:rows(YY1),.]*ZZ'- psi'.*(ss[1:rows(YY1)-1,.]*ZZ') ;
+
+     @print yy1[1,.]'~(psi'.*YY1[1,.])'; wait;@
+
+     resid = Ystar - xstar ;
+     resid = resid[2:rows(resid),.];
+
+     i = 1;
+     sig2_v = 0;
+     omega = zeros(num,num);
+
+     do until i > num;
+
+      //if case_c_zz[i,2]== 8; // nominal interest rate
+            omega[i,i] = 0.01;
+       
+      //else;
+	     v0_ = case_c_zz[i,8];
+	     d0_ = case_c_zz[i,9];         		 	     
+
+           nn = nobs + v0_;
+           d = d0_ + (resid[.,i])'*(resid[.,i]);
+           c = rndc(nn);
+           t2 = c/d;
+           SIG2_V = 1/t2;
+		   
+		   
+           omega[i,i] = sig2_v; 
+      //endif;
+
+         i = i + 1;
+     endo;
+ 
+    
+
+retp(omega);
+endp;
+
+@========================================================================@
+@========================================================================@
+ /* ADDPROCS.GSI */
+ /* compiled file used in Albert and Chib (JBES, 1993, 11,1-15) */
+   /* please contact Siddhartha Chib at chib@olin.wustl.edu
+            if there are problems*/
+
+proc rndc(a);       /* chisquare */
+local x,w;
+
+a = a/2;
+w= rg1(a);
+x = w * 2;
+
+retp(x);
+endp;
+
+
+proc rndb(a,b);                /* beta */
+local x,a1n,a1d;
+
+a1n = rg1(a);
+a1d = rg1(b);
+x = a1n / (a1n + a1d);
+
+retp(x);
+endp;
+
+
+proc rg1(a);
+local x,j,w,u;
+
+if a gt 1;
+x = rg2(a);
+elseif a lt 1;
+a = a + 1;
+u = rndu(1,1);
+x = rg2(a)*u^(1/a);
+elseif a == 1;
+x = -ln(rndu(1,1));
+endif;
+
+retp(x);
+endp;
+
+
+proc rg2(a);
+local gam,accept,b,c,j,x,z,u,v,w,y;
+
+b = a-1;
+c = 3*a - .75;
+accept = 0;
+do while accept == 0;
+u = rndu(1,1);
+v = rndu(1,1);
+w = u*(1-u);
+y = sqrt(c/w)*(u-.5);
+x = b+y;
+if x ge 0;
+z = 64*(w^3)*(v^2);
+accept = z le ( 1-(2*y^2)/x );
+if accept == 0;
+accept = ln(z) le 2*(b*ln(x/b) - y);
+endif;
+endif;
+endo;
+
+retp(x);
+endp;
+
+
+@================================================@
+/*
+proc  gendiff(z,rho);
+local ztrim,i,zgdiff;
+
+i = 1;
+ztrim = trimr(z,r,0);
+zgdiff = ztrim;
+do while i le r;
+zgdiff = zgdiff - rho[i]*trimr(z,r-i,i);
+i = i + 1;
+endo;
+retp(zgdiff);
+endp;
+*/
+
+
+proc pdfn1(yt,m,s2);
+local z,p;
+z = (yt - m)/sqrt(s2);
+p = pdfn(z)/sqrt(s2);
+retp(p);
+endp;
+trace 0;
+
+proc bingen(p0,p1,m);
+local pr0,s,u;
+
+pr0 = p0/(p0+p1);       /* prob(s=0) */
+u = rndu(m,1);
+s = u .ge pr0;
+
+retp(s);
+endp;
+
+proc markov(a,b,ss0,n);
+local s,u,i ;
+
+s = zeros(n,1);
+s[1,1] = ss0;
+
+i = 2;
+ do while i le n;
+
+if s[i-1,1] == 0;
+u = rndu(1,1);
+
+if u le a ;
+s[i,1] = 1;
+else;
+s[i,1] = 0;
+endif;
+
+elseif s[i-1,1] == 1;
+u = rndu(1,1);
+
+if u le (1-b) ;
+s[i,1] = 1;
+else;
+s[i,1] = 0;
+endif;
+
+endif;
+
+i = i + 1;
+endo;
+retp(s);
+endp;
+
+     proc switchg(s,g);
+     local n,m,switch,t,st1,st;
+
+     n = rows(s);
+     m = rows(g);
+     switch = zeros(m,m);     /* to store the transitions */
+
+     t = 2;
+     do while t le n;
+
+     st1 = s[t-1];
+     st = s[t];
+     switch[st1,st] = switch[st1,st] + 1;
+     t = t+ 1;
+     endo;
+
+     retp(switch);
+     endp;
+
+
+
+
+

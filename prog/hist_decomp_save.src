@@ -1,0 +1,109 @@
+
+/****************************
+   saving of  hist decomp
+***************************/
+      
+	   mean_decomp = decomp_sum/(floor(nsim/kk))/(iblock-burnin_blocks);
+
+       num_decomp = sumc(case_c_zz[.,12]);
+	   
+	   mean_decomp_save=zeros(rows(mean_decomp),num_decomp*nshock );
+	   
+	   yy_save=zeros(rows(yy),num_decomp); 
+	   
+      /*
+	   titlestr =
+     "output_gap " $|"Inflation" $|"Wage" $|"Investment" $|"Consumption" $|"Interest_Rate" $|"Labor"$|
+     "output_gap2 " $|"Inflation2" $|"Wage2" $|"Investment2" $|"Consumption2" $|"Interest_Rate2" $|"Labor2"$|
+     "output_gap3 " $|"Inflation3" $|"Wage3" $|"Investment3" $|"Consumption3" $|"Interest_Rate3" $|"Labor3"$|
+     "Consumption_4" $| "Consumption_5" $|"Consumption_6"$| "Consumption_47" $| "Consumption_8" $| 
+     "output_4" $| "output_5" $| "output_6" $|
+     "output_7" $| "output_7"  $| "Labor_4" $| "labor_5" $| "labor_6" $| "Interest Rate_4"$| 
+      "Interest_Rate_5"$| "Interest Rate_6" $| "Interest Rate_7" $| "Interest Rate_8" $|
+      "Inflation_4" $| "Inflation_5" $| "Inflation_6" $| "Inflation_7" $| "Inflation_8" $| 
+       "Inflation_9" $| "Inflation_10";
+       */ 
+
+       titlestr_s ={};
+       
+
+       index_i = 1;  y_ind =1;
+
+       do until index_i > rows(case_c_zz);
+
+            if ( case_c_zz[index_i,12] == 1 )and (case_c_zz[index_i,4] Ne 0);
+               
+               yy_save[.,y_ind] = yy[.,index_i];			   
+			   
+			   titlestr_s = titlestr_s $|titlestr_save[index_i];
+			   
+			   index_j = 1;
+			   do until index_j > nshock;
+			       mean_decomp_save[.,y_ind+num_decomp*(index_j-1)] 
+				       = mean_decomp[.,index_i+ndata*(index_j-1)]; 
+									   
+					   
+                  index_j = index_j +1 ;
+			    endo;
+			  
+			   y_ind = y_ind + 1;  
+		    endif;
+
+              index_i = index_i + 1;
+
+        endo;              
+		
+/**************************************************/
+/*
+titlestr = "Output  " $|
+           "Inflation " $|         
+           "Real Wage " $|          
+           "Investment " $|
+           "Consumption " $|
+           "Nominal_Interest_Rate " $|
+           "Labor "      ;    @@
+*/
+shockstr = "Preference_Shock " $|
+           "Investment_Shock " $| 
+           "Equity_Premium_Shock " $|          
+           "Labor_Supply_Shock " $|  
+           "Wage_Markup_Shock " $|   
+           "Productivity_Shock " $| 
+           "Price_Markup_Shock " $|  
+           "Government_Spending_Shock " $|
+           "Monetary_Policy_Shock "  ; 
+
+
+if mhrun == "2";
+     output file= c:\dge_sw\results\hist_decomp_SW.txt reset; 
+elseif mhrun == "3";
+     output file= c:\dge_sw\results\hist_decomp_a.txt reset; 
+elseif mhrun == "4";
+   output file= c:\dge_sw\results\hist_decomp_b.txt reset;
+elseif mhrun == "5";
+   output file= c:\dge_sw\results\hist_decomp_c.txt reset;
+endif; 
+
+ output on;
+
+        y_ind = 1;
+       do until y_ind > num_decomp;
+       /* iterate over endogenous variables */
+          
+          titlestr_s[y_ind]; 
+          " " titlestr_s[y_ind] " " shockstr[1:3]';
+        yy_save[2:rows(yy),y_ind]~mean_decomp_save[.,y_ind]~mean_decomp_save[.,y_ind+num_decomp]~mean_decomp_save[.,y_ind+num_decomp*2];                 
+          
+          " " shockstr[4:6]';
+        mean_decomp_save[.,y_ind+num_decomp*3]~mean_decomp_save[.,y_ind+num_decomp*4]~mean_decomp_save[.,y_ind+num_decomp*5];          
+
+         " "  shockstr[7:9]';
+        mean_decomp_save[.,y_ind+num_decomp*6]~mean_decomp_save[.,y_ind+num_decomp*7]~mean_decomp_save[.,y_ind+num_decomp*8];
+         
+
+         y_ind = y_ind+1;
+      endo;
+
+ output off; 
+
+

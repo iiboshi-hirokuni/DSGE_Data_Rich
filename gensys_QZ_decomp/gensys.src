@@ -1,0 +1,562 @@
+/**********************************************************
+**
+**  Procedures to solve a linear rational expections model
+**
+**********************************************************/
+
+proc(9) = gensys(GAM0, GAM1, C, PSI, PPI, div, verbose);
+/* System is given as 
+**     GAM0*y(t) = GAM1*y(t-1) + C + PSI*z(t) + PPI*eta(t)
+** z(t) is an exogenous process, eta(t) is a vector of expectational errors
+** which is to be endogenously determined
+** DIV is cutoff for unstable roots. If DIV = 0 then a DIV > 1 is calculated
+** The solution is of the form
+**     y(t) = T1*y(t-1) + TC + T0*z(t)
+**            + E[ TY*(I - M/L)^(-1) *TZ*z(t+1) | t] + TETA*eta(t)
+** where L denotes the lag operator.
+** If z(t) is iid the fourth term drops out, since E[z(t+s)|t] = 0
+** If the system has a unique solution, then TETA = 0
+**
+** Return Code
+** RC[1] = 1:  solution exists
+** RC[1] = -1: solution exists only if z(t) is not serially correlated
+** RC[2] = 1: solution is unique
+** RC    = [-2,-2] coincident zeros
+** RC[   = [-3,-3] missing values in QZ decomposition
+**
+** This procedure is a translation of  GENSYS by Chris Sims into GAUSS
+** It uses a generalized Schur decomposition by Paul Soderlind
+*/
+
+local realsmall, n, cutoff, cutoffhat,
+      T1, TC, T0, TETA, TY, TP, TZ, GEV, RC,
+      LAM, OMEGA, Q, Z, V, M,
+      unstab_n, zxz, i,
+      Qtr, Qtr1, Qtr2, LAM22, OMEGA22,
+      ETA1_wt, ETA1_u, ETA1_d, ETA1_v, ETA1_vnull, ETA1_rank,
+      ETA2_wt, ETA2_u, ETA2_d, ETA2_v, ETA2_vnull, ETA2_rank, ETA2_n,
+      Z2_wt, Z2_u, Z2_d, Z2_v, Z2_vnull, Z2_rank,
+      Z2_wtx, Z2_wtx0, Z2_ux, Z2_dx, Z2_vx, Z2_vnullx, Z2_rankx,
+      exist_iid, exist_allz, uniqueness, resid, resid_norm,
+      PHI, TRANS_mat, G0, G0_inv;
+
+RC = 0|0;
+realsmall = 1E-6;
+n  = rows(GAM0);
+if div == 0; 
+   cutoff = 1.01;
+else;
+   cutoff = div;
+endif;
+
+/* Initialize Output
+*/
+T1 = zeros(n,n);
+TC = zeros(n,1);
+T0 = zeros(n,cols(PSI));
+TETA = zeros(n,cols(PPI));
+TY = 0;
+TP = 0;
+TZ = 0;
+M = 0;
+GEV = zeros(n,n);
+
+
+/* Compute a QZ decomposition for GAM0 and GAM1
+** Explosive eigenvalues appear in lower right
+*/
+{ LAM,OMEGA,Q,Z,V} = zTgSen( GAM0,GAM1,cutoff,0,0 );
+
+if ( ismiss(LAM) == 1) OR 
+   ( ismiss(OMEGA) == 1) OR
+   ( ismiss(Q) == 1) OR
+   ( ismiss(Z) == 1); 
+   RC = -3 | -3;
+   goto endgensys;
+endif; 
+
+unstab_n = 0;
+zxz      = 0;
+GEV      = diag(OMEGA) ~ diag(LAM);
+
+i = 1;
+do until i > n;
+
+   if div == 0;
+      if LAM[i,i] > 0;
+         cutoffhat = abs(OMEGA[i,i]) / abs(LAM[i,i]) ;
+         if ((1+realsmall) < cutoffhat ) AND (cutoffhat < cutoff);
+            cutoff = 0.5*(1+cutoffhat);
+         endif;
+      endif;
+   endif;
+
+   unstab_n = unstab_n + ( (abs(OMEGA[i,i])/abs(LAM[i,i])) > cutoff );
+   if (abs(LAM[i,i]) < realsmall) AND (abs(OMEGA[i,i]) < realsmall);
+      zxz = 1;
+   endif;
+
+   i = i+1;
+endo;
+
+if zxz == 1;
+   RC = -2 | -2;
+   goto endgensys;
+endif;
+
+Qtr  = Q';
+
+if unstab_n == 0;
+   /* No unstable roots: existence and non-uniqueness */
+   RC[1] = 1;
+   RC[2] = 1;
+   T1 = Z*inv(LAM)*OMEGA*Z';
+   TC = Z*inv(LAM)*Qtr*C;
+   T0 = Z*inv(LAM)*Qtr*PSI;
+   TETA = Z*inv(LAM)*Qtr*PPI;
+   TY = inv(LAM);
+   M = 0;
+   goto endgensys;
+elseif unstab_n == n;
+   /* All roots are unstable */
+   Qtr1 = 0;
+   Qtr2 = Qtr[n-unstab_n+1:n,.];
+   LAM22   = LAM[n-unstab_n+1:n,n-unstab_n+1:n];
+   OMEGA22 = OMEGA[n-unstab_n+1:n,n-unstab_n+1:n]; 
+else;
+   Qtr1 = Qtr[1:n-unstab_n,.];
+   Qtr2 = Qtr[n-unstab_n+1:n,.];
+   LAM22   = LAM[n-unstab_n+1:n,n-unstab_n+1:n];
+   OMEGA22 = OMEGA[n-unstab_n+1:n,n-unstab_n+1:n]; 
+endif;
+
+/* Check for Existence of Equilibrium
+*/
+ETA2_wt = Qtr2*PPI;
+{ETA2_u, ETA2_d, ETA2_v, ETA2_vnull, ETA2_rank} = svdrr(ETA2_wt);
+Z2_wt   = Qtr2*PSI;
+{Z2_u, Z2_d, Z2_v, Z2_vnull, Z2_rank}           = svdrr(Z2_wt);
+
+if Z2_rank == 0;
+
+   exist_iid  = 1;
+   exist_allz = 1;
+
+else;
+
+   /* Check Existence for Z(t) iid
+   */
+   resid      = Z2_u - ETA2_u*ETA2_u'*Z2_u;
+   resid_norm = sqrt(sumc(diag(resid'*resid)));
+   exist_iid  = resid_norm < realsmall*n;
+ 
+   /* Check Existence for general Z(t)
+   */
+   Z2_wtx0 = inv(OMEGA22)*Z2_wt;
+   Z2_wtx  = Z2_wtx0;
+   M       = inv(OMEGA22)*LAM22;
+   i = 2;
+   do until i > unstab_n;
+      Z2_wtx = M*Z2_wtx ~ Z2_wtx0;
+      i = i+1;
+   endo;
+   Z2_wtx = OMEGA22*Z2_wtx;
+
+   {Z2_ux, Z2_dx, Z2_vx, Z2_vnullx, Z2_rankx} = svdrr(Z2_wtx);
+
+   resid      = Z2_ux - ETA2_u*ETA2_u'*Z2_ux;
+   resid_norm = sqrt(sumc(diag(resid'*resid)));
+   exist_allz = resid_norm < realsmall*n;
+
+endif;
+
+if (exist_allz == 1);
+   /* Solution exists for all Z(t) processes
+   */
+   RC[1] = 1;
+elseif (exist_iid == 1);
+   /* Solution only exists for iid Z(t)
+   */
+   RC[1] = -1;
+else;
+   /* Stable Solution does not exist
+   */
+   RC[1] = 0;
+   goto endgensys;
+endif;   
+
+/* If Existence, Check for Uniqueness of Equilibrium
+*/
+ETA1_wt = Qtr1*PPI;
+{ETA1_u, ETA1_d, ETA1_v, ETA1_vnull, ETA1_rank} = svdrr(ETA1_wt);
+
+if ETA1_rank == 0;
+   uniqueness = 1;
+else;
+   resid      = ETA1_v - ETA2_v*ETA2_v'*ETA1_v;
+   resid_norm = sqrt(sumc(diag(resid'*resid)));
+   uniqueness = resid_norm < realsmall*n;
+endif;
+
+if uniqueness == 1;
+   RC[2] = 1;
+endif;
+
+/* Create Solution in terms of w(t) = Z'*y(t)
+*/
+if unstab_n < n;
+
+   PHI       = ETA1_wt*ETA2_v*inv(ETA2_d)*ETA2_u';
+   TRANS_mat = eye(n-unstab_n) ~ -PHI;
+   G0        = TRANS_mat*LAM | 
+               (zeros(unstab_n,n-unstab_n) ~ eye(unstab_n) );
+   T1        = TRANS_mat*OMEGA |
+               zeros(unstab_n,n);
+            
+   /* Verify that G0 is non-singular:  
+   */
+   trap 1;
+   if    ( scalerr(inv(G0)) NE 0 ) 
+      OR ( scalerr(inv(LAM22 - OMEGA22)) NE 0 )
+      OR ( scalerr(inv(OMEGA22)) NE 0 );
+      RC = -3 | -3;
+      goto endgensys;
+   endif;
+   trap 0;
+            
+   G0_inv    = inv(G0);
+   T1        = G0_inv*T1;
+   TC        = G0_inv*( Trans_mat*Qtr*C |
+                        inv(LAM22 - OMEGA22)*Qtr2*C );
+                        
+/* Old version:   inv(OMEGA22 - LAM22)*Qtr2*C ); */
+
+   T0        = G0_inv*( Trans_mat*Qtr*PSI |
+                        zeros(unstab_n,cols(PSI)) );
+   TZ        = -inv(OMEGA22)*Qtr2*PSI;
+   TY        = G0_inv[.,n-unstab_n+1:n];
+   TETA      = G0_inv*( (ETA1_wt - ETA1_wt*ETA2_v*ETA2_v')*ETA2_vnull |
+                        zeros(unstab_n,cols(ETA2_vnull)) );
+
+   /* Solution in terms of y(t)
+   */
+   T1        = real(Z*T1*Z');
+   TC        = real(Z*TC);
+   T0        = real(Z*T0);
+   TETA      = real(Z*TETA);
+   TY        = Z*TY;
+
+   /* ELSE: y(t) = zero for all times
+   */
+
+endif;
+
+endgensys:
+
+retp(T1,TC,T0,TY,M,TZ,TETA,GEV,RC);
+endp;
+
+
+proc(5) = svdrr(A);
+local R,U,V,V_null,D,Urr,Vrr,Drr,realsmall;
+realsmall = 1E-6;
+
+{U, D, V} = svd1(A);
+V = V';
+R = sumc(abs(diag(D)) .> realsmall);
+if R == 0;
+   Urr = U[.,1];
+   Drr = D[1,1];
+   Vrr = V[1,.];
+else;
+   Urr = U[.,1:R];
+   Drr = D[1:R,1:R];
+   Vrr = V[1:R,.];
+endif;
+
+if R == rows(V);
+   V_null = zeros(1,cols(V));
+else;
+   V_null = V[R+1:rows(V),.];
+endif;
+
+Vrr=Vrr';
+V_null = V_null';
+
+retp(Urr,Drr,Vrr,V_null,R);
+endp;
+
+
+/*--------------------------------------------------------------------------
+**  zTgSen
+**
+**  Paul Soderlind (Paul.Soderlind@hhs.se)
+**
+**  Purpose:   Calculate a sorted generalized complex Schur decomposition
+**             of A*x=lambda*B*x, where A and B are complex matrices.
+**             It generates Q,Z,S, and P in
+**
+**               A = Q*S*ZH  (Golub and van Loan: A = Q*T*ZH)
+**               B = Q*P*ZH  (Golub and van Loan: B = Q*S*ZH)
+**
+**             where ZH is the transpose of the complex conjugate of Z.
+**             S and P are upper triangular complex matrices,
+**             and Q and Z are unitary (i.e. QH = inv(Q) and ZH=inv(Z)).
+**
+**
+**
+**
+**  Usage:     dlibrary -a PszTgSen;     (only once)
+**
+**             { S,P,Q,Z,lambda } =
+**                                zTgSen( A,B,cutoff,pii_sii,GtIt ) or
+**
+**             in the notation of Golub and van Loan
+**
+**             { T,S,Q,Z,lambda } =
+**                                zTgSen( A,B,cutoff,pii_sii,GtIt )
+**
+**  Input:     A            NxN real or complex matrix
+**             B              ""
+**             Cutoff       scalar, cutoff point. See below
+**             pii_sii      scalar, governs the logical condition. See below
+**             GtIt             ""
+**
+**  Output:    S            NxN complex matrix (see above)
+**             P             ""
+**             Q             ""
+**             Z             ""
+**             lambda       Nx1 complex vector with generalized eigenvalues
+**                          computed as sii/pii (tii/sii acc to Golub and
+**                          van Loan)
+**
+**
+**  Sorting:   If sii are the diagonal elements of S and pii of P, then the
+**             following blocks are put first:
+**
+**                      pii_sii = 1               pii_sii = 0
+**        -----|----------------------------------------------------------
+**    GtIt = 1 |  abs(sii)>abs(pii)*Cutoff    abs(pii)>abs(sii)*Cutoff
+**             |
+**    GtIt = 0 |  abs(sii)<abs(pii)*Cutoff    abs(pii)<abs(sii)*Cutoff
+**
+**
+**             Since the generalized eigenvalues are lambda = sii/pii
+**             (lambda = tii/sii acc to Golub and van Loan), this
+**             table implies that the following blocks are put first:
+**
+**                      pii_sii = 1               pii_sii = 0
+**        -----|----------------------------------------------------------
+**    GtIt = 1 |  abs(lambda)>Cutoff          1/abs(lambda)>Cutoff
+**             |
+**    GtIt = 0 |  abs(lambda)<Cutoff          1/abs(lambda)<Cutoff
+**
+**
+**
+**
+**  Note 1:    The naming conventions follow the LAPACK Users' Guide.
+**             In contrast, Golub and van Loan (1996) use:
+**             A = Q*T*ZH  and B = Q*S*ZH.
+**
+**  Note 2:    Setting B=I gives a standard eigenvalue problem.
+**             In this case a standard (not generalized) Schur decomposition
+**             can be useful if the eigenvectors are linearly dependent.
+**
+**  Note 3:    This procedure calls on a dynamic library (dll file) created
+**             by compiling and linking my FORTRAN code PsZtgSen.F90 with the
+**             FORTRAN library Lapack.lib created from LAPACK 3.0.
+**             The calculations are made in complex(8) in FORTRAN 90.
+**
+**
+**  Paul Soderlind (Paul.Soderlind@hhs.se), 20 March 1998,
+**  documentation updated 9 Decemeber 1999
+----------------------------------------------------------------------------*/
+
+proc (5) = zTgSen( A,B,Cutoff,pii_sii,GtIt );
+
+  local Ar,Br,N,Ai,Bi,Qrr,Qi,Zr,Zi,S,P,Q,Z,AlphaR,AlphaI,BetaR,BetaI,lambda,
+        infosort,infocalc,BadData;
+
+  BadData = ismiss(A|B) + (not (abs(A|B)<1E+100));
+  if  BadData > 0.1;
+    retp( error(0),error(0),error(0),error(0),error(0) );
+  endif;
+
+
+  Ar = real(A');   /*real part of A: easier to pass doubles than complex*16*/
+  Br = real(B');   /*to FORTRAN*/
+  Ai = imag(A');   /*imaginary part of A*/
+  Bi = imag(B');
+
+  N = rows(Ar);
+
+  Qrr = zeros(N,N);   /*empty matrices to be filled by FORTRAN*/
+  Qi  = zeros(N,N);
+  Zr  = zeros(N,N);
+  Zi  = zeros(N,N);
+
+  AlphaR  = zeros(1,N);
+  AlphaI  = AlphaR;
+  BetaR   = AlphaR;
+  BetaI   = AlphaR;
+  infosort = -999.99;
+  infocalc = infosort;
+
+  dllcall PSZTGSEN(Ar,Ai,Br,Bi,Qrr,Qi,Zr,Zi,AlphaR,AlphaI,BetaR,BetaI,
+                   N,Cutoff,pii_sii,GtIt,infosort,infocalc);
+
+  S = complex( Ar',Ai' ); /*transpose since FORTRAN has column-major order*/
+  P = complex( Br',Bi' ); /*converting to complex matrices again*/
+  Q = complex( Qrr',Qi' );
+  Z = complex( Zr',Zi' );
+  lambda =  complex(AlphaR',AlphaI')./complex(BetaR',BetaI');
+
+  if (round(infosort) /= 0) or  (round(infocalc) /= 0);
+    S      = error(0);   /*infosort: scalar, information about convergence*/
+    P      = error(0);   /*0: successful; <0 illegal argument; >0 error*/
+    Q      = error(0);   /*in computation (see ztgsen.f in Lapack for*/
+    Z      = error(0);   /*more details)*/
+    lambda = error(0);   /*infocalc: as infosort, but for decomposition*/
+  endif;
+
+  retp( S,P,Q,Z,lambda );
+
+endp;
+/*------------------------------------------------------------------------*/
+
+
+
+/*--------------------------------------------------------------------------
+**  dTgSen
+**
+**  Purpose:   Calculate a sorted generalized real Schur decomposition
+**             of A*x=lambda*B*x, where A and B are real matrices.
+**             It generates Q,Z,S, and P in
+**
+**               A = Q*S*Z'  (Golub and van Loan: A = Q*T*Z')
+**               B = Q*P*Z'  (Golub and van Loan: B = Q*S*Z')
+**
+**             where Z' is the transpose of Z.
+**             S and P are upper (quasi if S) triangular matrices,
+**             and Q and Z are orthogonal (i.e. QH = inv(Q) and ZH=inv(Z)).
+**
+**
+**
+**
+**  Usage:     dlibrary -a PsDtgSen;     (only once)
+**
+**             { S,P,Q,Z,lambda } =
+**                                 dTgSen( A,B,cutoff,pii_sii,GtIt ) or
+**
+**             in the notation of Golub and van Loan
+**
+**             { T,S,Q,Z,lambda } =
+**                                 dTgSen( A,B,cutoff,pii_sii,GtIt )
+**
+**
+**  Input:     A            NxN real matrix
+**             B              ""
+**             Cutoff       scalar, cutoff point. See below.
+**             pii_sii      scalar, governs the logical condition. See below.
+**             GtIt             ""
+**
+**  Output:    S            NxN real matrix (see above)
+**             P             ""
+**             Q             ""
+**             Z             ""
+**             lambda       Nx1 complex vector with generalized eigenvalues.
+**                          Note that these are not equal to sii/pii in the
+**                          real generalized Schur decomnposition if there
+**                          are repeated roots.
+**
+**
+**
+**
+**  Sorting:   If the generalized eigenvalues are lambda=alpha/beta, then the
+**             following blocks are put first:
+**
+**                      pii_sii = 1               pii_sii = 0
+**        -----|----------------------------------------------------------
+**    GtIt = 1 |  abs(alpha)>abs(beta)*Cutoff    abs(beta)>abs(alpha)*Cutoff
+**             |
+**    GtIt = 0 |  abs(alpha)<abs(beta)*Cutoff    abs(beta)<abs(alpha)*Cutoff
+**
+**
+**             Since the generalized eigenvalues are lambda = alpha/beta, this
+**             table implies that the following blocks are put first:
+**
+**                      pii_sii = 1               pii_sii = 0
+**        -----|----------------------------------------------------------
+**    GtIt = 1 |  abs(lambda)>Cutoff             1/abs(lambda)>Cutoff
+**             |
+**    GtIt = 0 |  abs(lambda)<Cutoff             1/abs(lambda)<Cutoff
+**
+**
+**
+**
+**
+**
+**  Note 1:    The naming conventions follow the LAPACK Users' Guide.
+**             In contrast, Golub and van Loan (1996) use:
+**             A = Q*T*Z'  and B = Q*S*Z'.
+**
+**  Note 2:    Setting B=I gives a standard eigenvalue problem.
+**             In this case a standard (not generalized) Schur decomposition
+**             can be useful if the eigenvectors are linearly dependent.
+**
+**  Note 3:    This procedure calls on a dynamic library (dll file) created
+**             by compiling and linking my FORTRAN code PsDtgSen.F90 with the
+**             FORTRAN library Lapack.lib created from LAPACK 3.0.
+**             The calculations are made in real(8) in FORTRAN 90.
+**
+**
+**
+**
+**  Paul Soderlind (Paul.Soderlind@hhs.se), 20 March 1998,
+**  documentation updated 9 Decemeber 1999
+----------------------------------------------------------------------------*/
+
+proc (5) = dTgSen( A,B,Cutoff,pii_sii,GtIt );
+
+  local AlphaR,AlphaI,Beta,N,Q,Z,S,P,lambda,infosort,infocalc,Alpha,BadData;
+
+  BadData = ismiss(A|B) + (not (abs(A|B)<1E+100));
+  if  BadData > 0.1;
+    retp( error(0),error(0),error(0),error(0),error(0) );
+  endif;
+
+  A = A';
+  B = B';
+
+  N = rows(A);
+
+  Q  = zeros(N,N);   /*empty matrices to be filled by FORTRAN*/
+  Z  = zeros(N,N);
+  AlphaR = zeros(1,N);
+  AlphaI = AlphaR;
+  Beta   = AlphaR;
+  infosort = -999.99;
+  infocalc = infosort;
+
+  dllcall PSDTGSEN(A,B,Q,Z,AlphaR,AlphaI,Beta,N,
+                   Cutoff,pii_sii,GtIt,infosort,infocalc);
+
+  S = A';    /*transpose since FORTRAN has column-major order*/
+  P = B';
+  Q = Q';
+  Z = Z';
+  Alpha = complex( AlphaR',AlphaI' );
+  lambda = Alpha./(Beta');
+
+  if (round(infosort) /= 0) or  (round(infocalc) /= 0);
+    S      = error(0);   /*infosort: scalar, information about convergence*/
+    P      = error(0);   /*0: successful; <0 illegal argument; >0 error*/
+    Q      = error(0);   /*in computation (see dtgsen.f in Lapack for*/
+    Z      = error(0);   /*more details)*/
+    lambda = error(0);   /*infocalc: as infosort, but for decomposition*/
+  endif;
+
+  retp( S,P,Q,Z,lambda );
+
+endp;
+/*------------------------------------------------------------------------*/

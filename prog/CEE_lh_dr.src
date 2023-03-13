@@ -1,0 +1,185 @@
+/* This library contains the following procedures
+**
+** proc(4) = evaldsge(para,msel,YY)
+**
+*/
+
+/* Global variables
+*/
+declare matrix _FIX1, _FIX2;
+
+proc (4) = evaldsge_dr(para,msel,YY, HH, psi, gam);
+/* This procedure evaluates the likelihood function of the 
+** monetary DSGE model
+** retcode = -1 : non existence                
+**         = 0  : existence and uniqueness     
+**         = 1  : existence and non-uniqueness
+*/
+local npara, para1, para2, nobs, loglh, loglhzero, retcode,
+      obsmean, obsvar, nstate, nseries, ystar,shock, shock_t,
+      T1,TC,TEPS,TETA,RC,
+      TT, RR, DD, QQ, VV, zz,
+      t, At, Pt, At1, Pt1, Phat, yhat, nu, Ft, alphahat, kentry;
+
+/* Parameters
+**  kappa, h, sigma_c, sigma_L, phi, iota_p iota_w  
+**  theta_p theta_w, rho_r, mu_pi, mu_y,  
+**  rho_a, rho_c, rho_k, rho_e, rho_f, rho_g, rho_l,
+**  e_a, e_c, e_e, e_f, e_g, e_k, e_l, e_r
+**  uR  uY  uC  uK  uPi  uW  uL  uRE  uLevE  uLevF  uS 
+*/
+
+//cols(YY[2:rows(YY),.]);
+
+zz = gam;
+
+ystar = YY[2:rows(YY),.]- psi'.*YY[1:rows(YY)-1,.];
+
+npara   = rows(para);
+retcode = 0;
+
+nobs     = rows(Ystar);
+nseries  = cols(YY);
+shock     = zeros(nobs,nshock);
+obsmean   = zeros(nobs,nseries);
+obsvar    = zeros(nobs,nseries);
+loglh     = 0;
+loglhzero = -1E20;
+
+/* solve the DSGE model
+*/
+{T1,TC,TEPS,RC} = dsgesolv(para);
+DD = zeros(5,1);
+
+nstate = 2*cols(T1);       // number of state variables
+
+if (RC[1] == 1) AND (RC[2]==1);
+   /* determinacy */
+   retcode[1] = 0;
+   TT = T1;
+   RR = TEPS;
+   
+elseif (RC[1] == 1) AND (RC[2]==0) ;
+   /* indeterminacy */
+   retcode[1] = 1;
+   TT = T1;
+   RR = TEPS;
+   
+   //loglh = loglhzero;
+   //goto eofevalsoe;
+   
+else;
+   /* no equilibrium exists, numerical problems */
+   retcode[1] = RC[1];
+   loglh = loglhzero;
+   goto eofevalsoe;
+
+endif;
+     
+/* create system matrices for state space model
+*/
+
+/* These matrices are regime independent
+*/
+
+//zz = make_zz(nstate/2);
+
+DD = zeros(ndata,1);      
+
+QQ = createcov(para[19:27,1]);
+VV = zeros(9,ndata);
+
+TT = T1~zeros(nstate/2,nstate/2)|
+     eye(nstate/2)~zeros(nstate/2,nstate/2);
+RR = TEPS|zeros(nstate/2,9);
+ZZ = ZZ~(-1)*psi.*ZZ;
+
+/* Check whether covariance matrix QQ is positive definite
+*/
+
+if sumc(eig(QQ).LE0) > 0;
+   loglh = loglhzero;
+   goto eofevalsoe;
+endif;
+
+/* Verify that I - TT.*.TT is invertible  
+*/
+/*
+trap 1;
+if  scalerr(inv(eye(nstate^2) - (TT.*.TT)) ) NE 0 ;
+    loglh = -1E20;
+    goto eofevalsoe;
+endif;
+trap 0;
+*/
+
+/* We can now define the initial mean and variance for the state vector
+*/
+
+
+// initial value of state variables
+At = make_init(yy, nstate);
+
+/*
+Pt = reshape(inv(eye(nstate^2) - (TT.*.TT))*vec(RR*QQ*RR'),nstate,nstate);
+Pt = symmat(Pt);
+*/
+Pt = dlyap(TT,RR*QQ*RR');
+/* compute likelihood with Kalman filter
+*/
+
+t = 1;
+do until t > nobs;
+
+   At1 = At;  // set initial value
+   Pt1 = Pt;
+
+   /* Forecasting
+   */
+   alphahat = TT*At1;
+   Phat = TT*Pt1*TT' + RR*QQ*RR';
+   yhat = ZZ*alphahat + DD;
+   nu   = Ystar[t,.] - yhat';
+   
+   Ft   = ZZ*Phat*ZZ' + HH + ZZ*RR*VV + (ZZ*RR*VV)';
+   Ft   = 0.5*(Ft + Ft');
+   
+   loglh = loglh -0.5*cols(YY)*ln(2*pi) 
+           - 0.5*ln(det(Ft)) - 0.5*nu*inv(Ft)*nu';
+
+   /* Updating
+   */
+   At = alphahat + (Phat*ZZ' + RR*VV)*inv(Ft)*nu';
+   Pt = Phat - (Phat*ZZ'+RR*VV)*inv(Ft)*(Phat*ZZ'+RR*VV)';
+
+   
+   obsmean[t,.] = (ZZ[.,1:21]*alphahat[1:21])';
+   obsvar[t,.]  = diag(Ft)';
+
+    
+   t = t+1;
+endo;  
+
+eofevalsoe:   
+retp(real(loglh),retcode,obsmean,obsvar);
+endp;
+
+/*************************************************************************/
+proc(1) = createcov(para);
+local omega, i ;
+
+omega = zeros(9,9);
+
+i = 1;
+
+do until i > 9;
+
+  omega[i,i]= para[i]^2;
+
+  i = i + 1;
+
+endo;
+
+
+retp(omega);
+endp;

@@ -1,0 +1,45 @@
+1  1E-6   0.99    1
+1  1E-6   10     10
+1  1E-6   10     10 
+1  1E-6   10     10
+1  1E-6   10      1
+1  1E-6   10      10
+1  1E-6   0.95     1  
+1  1E-6   0.95     1
+1  1E-6   0.95     1
+1  1E-6   0.95     1
+1  1E-6   0.95     1    
+1  1E-6   2        1 
+0  1E-6   2         1    
+1  1E-6   0.95      1
+1  1E-6   0.95      1
+1  1E-6   0.95      1
+1  1E-6   0.95      1
+1  1E-6   0.95      1
+2  1E-6   10        1 
+2  1E-6   10        1 
+2  1E-6   10        1 
+2  1E-6   10        1 
+2  1E-6   10        1 
+2  1E-6   10     1 
+2  1E-6   10        1 
+2  1E-6   10        1 
+2  1E-6   10        1
+
+/* Parameters
+**
+**  h,  sigma_c, sigma_L,  var_phi (capital util. adj. cost),  
+**  phi (Fixed Cost share), psi, gam_p, gam_w, 
+**  xi_p, xi_w,  
+**  rho_m, mu_pi, mu_y
+**  rho_z, rho_c, rho_g, rho_L, rho_i,
+**  e_c, e_inv, e_q, e_L, e_w, e_z, e_p, e_g, e_m
+**
+**
+Transformations:
+format: type, a, b, c
+Type 1:
+x is [a,b] -> [-1,1] -> [-inf,inf] by (1/c)*c*z/sqrt(1-c*z^2)
+Type 2:
+x is [0,inf] -> [-inf,inf] by b + (1/c)*ln(para[i]-a);
+*/

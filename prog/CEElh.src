@@ -1,0 +1,234 @@
+/* This library contains the following procedures
+**
+** proc(4) = evaldsge(para,msel)
+**
+*/
+
+/* Global variables
+*/
+declare matrix _FIX1, _FIX2;
+
+proc (5) = evaldsge(para,msel,YY);
+/* This procedure evaluates the likelihood function of the 
+** monetary DSGE model
+** retcode = -1 : non existence                
+**         = 0  : existence and uniqueness     
+**         = 1  : existence and non-uniqueness
+*/
+local npara, para1, para2, nobs, loglh, loglhzero, retcode,
+      obsmean, obsvar, nstate, shock, nseries,
+      T1,TC,TEPS,TETA,RC,
+      TT, RR, DD, ZZ, HH, QQ, VV, 
+      nu_save, ft_save, kg_save,at_save, pt_save,
+      r_t, n_t,l_t, w_t,c_t, eta, k_g,
+      t, At, Pt, At1, Pt1, Phat, yhat, nu, Ft, alphahat, kentry;
+
+/* Parameters
+**  h,  sigma_c, sigma_L, beta, phi, tau, Rk, gam_p, 
+**  gam_w, psi_p, psi_w, alpha, psi, k_y, g_y,
+**  rho_m, mu_pi, mu_y
+**  e_c, e_inv, e_q, e_L, e_w, e_z, e_p, e_g, e_m
+*/
+
+npara   = rows(para);
+retcode = 0;
+
+
+/* solve the DSGE model
+*/
+{T1,TC,TEPS,RC} = dsgesolv(para);
+DD = zeros(5,1);
+
+nseries  = cols(YY);
+nstate   = cols(T1);
+
+nobs      = rows(YY);
+loglh     = 0;
+loglhzero = -1E8;
+obsmean   = zeros(nobs,cols(YY));
+obsvar    = zeros(nobs,cols(YY));
+nu_save   = zeros(nseries,nobs);
+ft_save   = zeros(nseries,nseries*nobs); 
+kg_save   = zeros(nstate,nseries*nobs);
+pt_save   = zeros(nstate,nstate*nobs); 
+shock     = zeros(nobs,nshock);
+
+if (RC[1] == 1) AND (RC[2]==1);
+   /* determinacy */
+   retcode[1] = 0;
+   TT = T1;
+   RR = TEPS;
+   
+elseif (RC[1] == 1) AND (RC[2]==0) ;
+   /* indeterminacy */
+   retcode[1] = 1;
+   TT = T1;
+   RR = TEPS;
+   
+   loglh = loglhzero;
+   goto eofevalsoe;
+   
+else;
+   /* no equilibrium exists, numerical problems */
+   retcode[1] = RC[1];
+   loglh = loglhzero;
+   goto eofevalsoe;
+
+endif;
+     
+/* create system matrices for state space model
+*/
+
+/* These matrices are regime independent
+*/
+ZZ      = zeros(7,nstate);
+ZZ[1,1] = 1;               /* output gap */
+ZZ[2,2] = 4;               /* inflation */
+ZZ[3,3] = 1;               /* wage */
+ZZ[4,6] = 1;               /* investment */            
+ZZ[5,7] = 1;               /*  consumption */
+ZZ[6,8] = 4;               /*  nominal rate  */
+ZZ[7,10] = 1;              /*  labor */   
+
+DD      = zeros(7,1);      
+
+HH = zeros(7,7);
+QQ = createcov(para[19:27,1]);
+VV = zeros(9,7);
+
+/* Check whether covariance matrix QQ is positive definite
+*/
+
+if sumc(eig(QQ).LE0) > 0;
+   loglh = loglhzero;
+   goto eofevalsoe;
+endif;
+
+/* Verify that I - TT.*.TT is invertible  
+*/
+/*
+trap 1;
+if  scalerr(inv(eye(nstate^2) - (TT.*.TT)) ) NE 0 ;
+    loglh = -1E20;
+    goto eofevalsoe;
+endif;
+trap 0;
+*/
+
+/* We can now define the initial mean and variance for the state vector
+*/
+At = zeros(nstate,1);
+at[1]=yy[1,1]; at[2]=yy[1,2]/4; at[3]=yy[1,3]; at[6]=yy[1,4];    
+at[7]=yy[1,5]; at[8]=yy[1,6]/4; at[10]= yy[1,7]; 
+
+/*
+Pt = reshape(inv(eye(nstate^2) - (TT.*.TT))*vec(RR*QQ*RR'),nstate,nstate);
+Pt = symmat(Pt);
+*/
+
+Pt = dlyap(TT,RR*QQ*RR');
+/* compute likelihood with Kalman filter
+*/
+
+t = 1;
+do until t > nobs;
+
+   At1 = At;
+   Pt1 = Pt;
+
+   /* Forecasting
+   */
+   alphahat = TT*At1;
+   Phat = TT*Pt1*TT' + RR*QQ*RR';
+   yhat = ZZ*alphahat + DD;
+   nu   = YY[t,.] - yhat';
+   
+   Ft   = ZZ*Phat*ZZ' + HH + ZZ*RR*VV + (ZZ*RR*VV)';
+   Ft   = 0.5*(Ft + Ft');
+
+   K_g = TT*Phat*ZZ'*inv(Ft);   // Kalman Gain
+   Pt_save[.,(t-1)*nstate+1:t*nstate] = Phat;
+   
+   loglh = loglh -0.5*cols(YY)*ln(2*pi) 
+           - 0.5*ln(det(Ft)) - 0.5*nu*inv(Ft)*nu';
+
+   /* Updating
+   */
+   At = alphahat + (Phat*ZZ' + RR*VV)*inv(Ft)*nu';
+   Pt = Phat - (Phat*ZZ'+RR*VV)*inv(Ft)*(Phat*ZZ'+RR*VV)';
+   
+   /*  store  
+   */
+   obsmean[t,.] = yhat';
+   obsvar[t,.]  = diag(Ft)';
+   nu_save[.,t] = nu';
+   Ft_save[.,(t-1)*nseries+1:t*nseries] = Ft;
+   Kg_save[.,(t-1)*nseries+1:t*nseries] = K_g;
+   
+   t = t+1;
+endo;  
+
+/* state smoothing by Durbin & Koopman (2001, p73-75)
+ */
+
+r_t = zeros(nstate,1);  N_t = zeros(nstate,nstate); 
+eta = zeros(9,nobs);
+
+t = nobs; 
+do until t < 1;
+nu = nu_save[.,t];
+Ft =  Ft_save[.,(t-1)*nseries+1:t*nseries];
+K_g = Kg_save[.,(t-1)*nseries+1:t*nseries];
+phat = pt_save[.,(t-1)*nstate+1:t*nstate];
+L_t = TT- K_g*ZZ; 
+
+r_t = ZZ'*inv(Ft)*nu + L_t'*r_t;        //4.32
+
+eta[.,t] = QQ*RR'*r_t;      // 4.84
+
+//N_t = ZZ'*inv(Ft)*ZZ + L_t'*N_t*L_t;
+//alpha_t = at_save[.,t] + Phat * r_t;     
+//V_t   = phat - phat*N_t*phat; 
+
+//yhat  = ZZ * alpha_t;
+//obssmooth[t,.] = yhat';
+
+t = t-1;
+endo;
+
+shock = eta';
+
+eofevalsoe:   
+retp(real(loglh),retcode,obsmean,obsvar, shock );
+endp;
+
+/*************************************************************************/
+proc(1) = createcov(para);
+local omega,
+      sig_1, sig_2, sig_3, sig_4, sig_5, sig_6,
+      sig_7, sig_8, sig_9;
+
+sig_1   = para[1];
+sig_2   = para[2];
+sig_3   = para[3];
+sig_4   = para[4];
+sig_5   = para[5];
+sig_6   = para[6];
+sig_7   = para[7];
+sig_8   = para[8];
+sig_9   = para[9];
+
+omega = zeros(9,9);
+
+omega[1,1] = sig_1^2;
+omega[2,2] = sig_2^2;
+omega[3,3] = sig_3^2;
+omega[4,4] = sig_4^2;
+omega[5,5] = sig_5^2;
+omega[6,6] = sig_6^2;
+omega[7,7] = sig_7^2;
+omega[8,8] = sig_8^2;
+omega[9,9] = sig_9^2;
+
+retp(omega);
+endp;
